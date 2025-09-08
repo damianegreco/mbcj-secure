@@ -8,8 +8,11 @@ const requestLimit = require('./requestLimit');
 const customMongoSanitize = require('./sanitizer');
 const xssSanitizer = require('./xssSanitizer');
 
+const { BODY_LIMIT } = process.env;
+
 function secureControl(app, options = {}) {
   const { logsPath, isDevMode, corsOptions } = options;
+  app.use(logger(logsPath, 'dev'));
 
   app.set('query parser', 'extended');
   app.set('trust proxy', 1);
@@ -20,11 +23,9 @@ function secureControl(app, options = {}) {
     app.use(...limiters);
   }
 
-  app.use(express.json({ limit: '10kb' }));
+  app.use(express.json({ limit: BODY_LIMIT ?? '10kb' }));
   app.use(express.urlencoded({ extended: true }));
 
-  // CORRECCIÓN: Configuración de CORS más robusta y explícita.
-  // Se crea una configuración dinámica si `corsOptions.origin` está definido.
   let finalCorsOptions = corsOptions;
   if (corsOptions && corsOptions.origin) {
     finalCorsOptions = {
@@ -34,13 +35,9 @@ function secureControl(app, options = {}) {
           ? corsOptions.origin
           : [corsOptions.origin];
 
-        // Permitimos peticiones sin 'origin' (como las de Postman o CURL)
-        // o si el origen está en nuestra lista de permitidos.
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
-          // No devolvemos un error, simplemente no permitimos el origen.
-          // El middleware de CORS se encargará de no enviar la cabecera de acceso.
           callback(null, false);
         }
       },
@@ -54,7 +51,6 @@ function secureControl(app, options = {}) {
   app.use(xssSanitizer);
 
   app.use(hpp());
-  app.use(logger(logsPath, 'dev'));
 }
 
 module.exports = { secureControl, logger, requestLimit };
