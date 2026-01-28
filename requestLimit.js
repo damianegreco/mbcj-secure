@@ -75,6 +75,10 @@ function requestLimit(options = {}) {
     keyGenerator: identificarUsuario,
     standardHeaders: true,
     legacyHeaders: false,
+    validate: {
+        xForwardedForHeader: false,
+        default: true
+    },
     handler: (req, res) => {
       const key = identificarUsuario(req);
       console.error(`Límite de peticiones excedido por: ${key}. Peticiones bloqueadas por los próximos ${BAN_TIME_MIN} min.`);
