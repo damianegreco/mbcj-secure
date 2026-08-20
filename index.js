@@ -11,12 +11,23 @@ const xssSanitizer = require('./xssSanitizer');
 const { BODY_LIMIT } = process.env;
 
 /**
- * Aplica una capa de seguridad integral a una aplicación Express.
- * @param {import('express').Application} app - La instancia de la aplicación Express.
- * @param {object} [options={}] - Objeto de configuración.
+ * Envuelve un middleware para que se salte en las rutas indicadas.
+ * Útil para rutas que son proxies puros y no deben consumir el stream
+ * del request (body-parsers) antes de que llegue al destino.
+ * @param {Function} middleware
+ * @param {string[]} excludePaths - Prefijos de ruta a excluir (ej: ['/api'])
  */
+function skippable(middleware, excludePaths = []) {
+  if (!excludePaths.length) return middleware;
+  return (req, res, next) => {
+    const url = req.originalUrl || req.url;
+    const isExcluded = excludePaths.some(p => url.startsWith(p));
+    if (isExcluded) return next();
+    return middleware(req, res, next);
+  };
+}
+
 function secureControl(app, options = {}) {
-  // Se destructuran todas las opciones, incluidas las de rate limiting.
   const {
     logsPath,
     isDevMode,
@@ -25,7 +36,8 @@ function secureControl(app, options = {}) {
     SLOW_REQUEST,
     SLOW_DELAY,
     BAN_TIME_MIN,
-    BAN_REQUEST
+    BAN_REQUEST,
+    excludeBodyParsingPaths = [] // NUEVO
   } = options;
 
   app.use(logger(logsPath, 'dev'));
@@ -34,11 +46,8 @@ function secureControl(app, options = {}) {
   app.set('trust proxy', 1);
 
   const inDevelopment = String(isDevMode).trim().toLowerCase() === 'true';
-  
-  // Solo se aplica el rate limiting si no estamos en modo de desarrollo.
+
   if (!inDevelopment) {
-    // NUEVO: Se prepara el objeto de configuración para requestLimit.
-    // Aquí se realiza el parseo de string a número y se asignan valores por defecto.
     const rateLimitOptions = {
       SLOW_TIME_MIN: parseInt(SLOW_TIME_MIN, 10) || 15,
       SLOW_REQUEST: parseInt(SLOW_REQUEST, 10) || 300,
@@ -47,13 +56,17 @@ function secureControl(app, options = {}) {
       BAN_REQUEST: parseInt(BAN_REQUEST, 10) || 300
     };
 
-    // MODIFICADO: Se pasa el objeto de opciones a la función requestLimit.
+    // El rate limiting y el bloqueo de path traversal NO consumen el body,
+    // así que se mantienen activos también para las rutas excluidas.
     const limiters = requestLimit(rateLimitOptions);
     app.use(...limiters);
   }
 
-  app.use(express.json({ limit: BODY_LIMIT ?? '10kb' }));
-  app.use(express.urlencoded({ extended: true }));
+  // MODIFICADO: los body-parsers ahora respetan excludeBodyParsingPaths
+  const jsonParser = express.json({ limit: BODY_LIMIT ?? '10kb' });
+  const urlencodedParser = express.urlencoded({ extended: true });
+  app.use(skippable(jsonParser, excludeBodyParsingPaths));
+  app.use(skippable(urlencodedParser, excludeBodyParsingPaths));
 
   let finalCorsOptions = corsOptions;
   if (corsOptions && corsOptions.origin) {
@@ -72,10 +85,14 @@ function secureControl(app, options = {}) {
       },
     };
   }
-  
+
   app.use(cors(finalCorsOptions));
   app.use(helmet());
 
+  // customMongoSanitize y xssSanitizer dependen de req.body/query/params ya
+  // parseados; si la ruta está excluida, req.body será undefined y estos
+  // middlewares simplemente no hacen nada (ya tienen guards `if (req.body)`),
+  // así que no requieren cambios adicionales.
   app.use(customMongoSanitize);
   app.use(xssSanitizer);
 
