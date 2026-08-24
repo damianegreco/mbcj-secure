@@ -152,3 +152,36 @@ app.listen(PORT, (error) => {
 
 module.exports = app;
 ```
+
+## Content Security Policy
+
+`secureControl` aplica las cabeceras por defecto de `helmet`, que incluyen una CSP
+estricta: `default-src 'self'` y `script-src 'self'`.
+
+### `wasmPaths` — WebAssembly acotado por ruta
+
+Instanciar WebAssembly requiere `'wasm-unsafe-eval'` dentro de `script-src`. Es el
+caso de los fronts que leen documentos con la cámara: el lector de códigos (PDF417
+del DNI, QR) corre sobre WASM y sin ese permiso falla con
+`CompileError: ... violates the following Content Security policy directive`.
+
+Habilitarlo para todo el servidor ampliaría la superficie de ataque de los sistemas
+que no lo necesitan, así que `wasmPaths` lo concede **sólo en los prefijos indicados**:
+
+```javascript
+secureControl(app, {
+  isDevMode: DEVELOP === 'true',
+  // El resto de las rutas mantiene la CSP estricta.
+  wasmPaths: ['/policia', '/morosos']
+});
+```
+
+Conviene tener presente que:
+
+- `'wasm-unsafe-eval'` es mucho más acotado que `'unsafe-eval'`: habilita la
+  compilación de WebAssembly pero **no** el `eval()` de JavaScript.
+- El resto de las directivas se conserva intacto en esas rutas.
+- Esto sólo resuelve la *compilación*. Si el módulo `.wasm` se descarga desde un CDN
+  externo, además haría falta habilitar ese dominio en `connect-src`. Es preferible
+  que cada front sirva su propio `.wasm` desde el mismo origen: evita tocar la CSP y
+  no depende de que el CDN sea alcanzable desde la red interna.

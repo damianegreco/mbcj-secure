@@ -27,6 +27,29 @@ function skippable(middleware, excludePaths = []) {
   };
 }
 
+/**
+ * Aplica la configuracion de seguridad estandar sobre una app de Express:
+ * logging, rate limiting, cabeceras de helmet, CORS, sanitizacion y HPP.
+ *
+ * @param {import('express').Application} app
+ * @param {object}   [options]
+ * @param {string}   [options.logsPath]                 - Carpeta donde se escriben los logs.
+ * @param {boolean}  [options.isDevMode]                - En modo desarrollo se omite el rate limiting.
+ * @param {object}   [options.corsOptions]              - Opciones de CORS.
+ * @param {string[]} [options.excludeBodyParsingPaths]  - Prefijos de ruta que no deben pasar por los body-parsers.
+ * @param {string[]} [options.wasmPaths]                - Prefijos de ruta donde se permite compilar WebAssembly.
+ *                                                        Agrega `'wasm-unsafe-eval'` a `script-src` solo en esas
+ *                                                        rutas; el resto de la aplicacion mantiene la CSP base.
+ *                                                        Pensado para los fronts que leen codigos con la camara.
+ *
+ * @example
+ * secureControl(app, {
+ *   logsPath: PATH_LOGS,
+ *   isDevMode: DEVELOP === 'true',
+ *   // Solo estos fronts pueden instanciar WebAssembly:
+ *   wasmPaths: ['/policia', '/morosos']
+ * });
+ */
 function secureControl(app, options = {}) {
   const {
     logsPath,
@@ -37,7 +60,8 @@ function secureControl(app, options = {}) {
     SLOW_DELAY,
     BAN_TIME_MIN,
     BAN_REQUEST,
-    excludeBodyParsingPaths = [] // NUEVO
+    excludeBodyParsingPaths = [], // NUEVO
+    wasmPaths = []
   } = options;
 
   app.use(logger(logsPath, 'dev'));
@@ -88,6 +112,26 @@ function secureControl(app, options = {}) {
 
   app.use(cors(finalCorsOptions));
   app.use(helmet());
+
+  // WebAssembly queda deshabilitado en toda la aplicacion por la CSP base:
+  // compilarlo exige 'wasm-unsafe-eval' dentro de script-src, y habilitarlo de
+  // forma global ampliaria la superficie de ataque de los sistemas que no lo
+  // usan. Por eso la politica se relaja unicamente en las rutas declaradas en
+  // `wasmPaths` — tipicamente los fronts que leen el DNI con la camara, cuyo
+  // lector de codigos corre sobre WASM.
+  //
+  // Se registra despues del helmet global a proposito: al tratarse de la misma
+  // cabecera, esta CSP pisa a la anterior solo en esas rutas.
+  if (wasmPaths.length > 0) {
+    const scriptSrcBase = helmet.contentSecurityPolicy.getDefaultDirectives()['script-src'];
+
+    app.use(wasmPaths, helmet.contentSecurityPolicy({
+      useDefaults: true,
+      directives: {
+        scriptSrc: [...scriptSrcBase, "'wasm-unsafe-eval'"]
+      }
+    }));
+  }
 
   // customMongoSanitize y xssSanitizer dependen de req.body/query/params ya
   // parseados; si la ruta está excluida, req.body será undefined y estos
